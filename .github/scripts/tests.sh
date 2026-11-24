@@ -9,12 +9,14 @@
 # unit, ci-checks, functional and end2end tests, each family of target tests
 # in a VM of its own, or one part of them: unit runs the unit and
 # ci-checks tests, functional and end2end the tier of that name.
-# functional-ci-N runs shard N of the functional tests.
+# functional-ci-N runs shard N of the functional tests. functional-own-1
+# and functional-own-2 run the tamperproof and upatch families, for a
+# target booted with the bpf.enforcement TEST_VM_BPF_ENFORCEMENT names.
 # With VM=0, setup installs only host test dependencies using the kernel
 # CI artifact's BTF, and run leaves out target VMs. CI supplies this artifact
 # built from testing/kernel.
 #
-#   .github/scripts/tests.sh setup|run [unit|functional|functional-ci-[1-4]|end2end]
+#   .github/scripts/tests.sh setup|run [unit|functional|functional-ci-[1-4]|functional-own-[1-2]|end2end]
 #
 # Runs as a user with passwordless sudo, from the checkout.
 
@@ -118,7 +120,7 @@ setup() {
 case "${1:-}" in
 setup|run) ;;
 *)
-	echo "usage: $0 setup|run [unit|functional|functional-ci-[1-4]|end2end]" >&2
+	echo "usage: $0 setup|run [unit|functional|functional-ci-[1-4]|functional-own-[1-2]|end2end]" >&2
 	exit 2
 	;;
 esac
@@ -128,8 +130,10 @@ case "${2:-}" in
 unit) goals='-C testing unit ci-checks' ;;
 functional|end2end) goals="-C testing $2" ;;
 functional-ci-[1-4]) goals="-C testing -k $2" ;;
+functional-own-1) goals='-C testing -k functional/tamperproof' ;;
+functional-own-2) goals='-C testing -k functional/upatch' ;;
 *)
-	echo "usage: $0 setup|run [unit|functional|functional-ci-[1-4]|end2end]" >&2
+	echo "usage: $0 setup|run [unit|functional|functional-ci-[1-4]|functional-own-[1-2]|end2end]" >&2
 	exit 2
 	;;
 esac

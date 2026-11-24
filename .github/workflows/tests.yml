@@ -76,6 +76,16 @@ jobs:
             runner: ubuntu-latest
             vm: '1'
             suite: functional-ci-4
+          - name: CI tamperproof tests, bpf.enforcement = own
+            runner: ubuntu-latest
+            vm: '1'
+            suite: functional-own-1
+            bpf_enforcement: own
+          - name: CI upatch tests, bpf.enforcement = own
+            runner: ubuntu-latest
+            vm: '1'
+            suite: functional-own-2
+            bpf_enforcement: own
           - name: CI end-to-end tests
             runner: ubuntu-latest
             vm: '1'
@@ -165,6 +175,7 @@ jobs:
         id: suite
         env:
           TEST_SUITE: ${{ matrix.suite }}
+          TEST_VM_BPF_ENFORCEMENT: ${{ matrix.bpf_enforcement }}
         run: .github/scripts/tests.sh run "$TEST_SUITE"
 
       - name: Upload guest logs
