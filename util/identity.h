@@ -37,6 +37,7 @@ struct identity {
 	__s32	dm_verity_keys[IDENTITY_KEYS_MAX];
 	__u32	nv_index;
 	__u32	config_pcr;
+	__u32	bpf_enforcement;
 };
 
 #define TASK_TRUSTED	1
@@ -75,7 +76,7 @@ struct task_policy {
 
 BUILD_BUG_ON(sizeof(struct device_authority) != 48);
 BUILD_BUG_ON(sizeof(struct task_authority) != 8);
-BUILD_BUG_ON(sizeof(struct identity) != 648);
+BUILD_BUG_ON(sizeof(struct identity) != 652);
 BUILD_BUG_ON(sizeof(struct task_policy) != 16);
 
 /* The bpffs mount init made, which the unmount guard keeps mounted. */

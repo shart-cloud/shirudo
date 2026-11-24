@@ -19,6 +19,7 @@
 cd "$(dirname "$0")/../.."
 . ./integration-lib.sh
 target_guard
+strict_guard
 
 H=helper/test-signed-load
 [ -x "$H" ] || test_skip_all "test-signed-load helper not built"

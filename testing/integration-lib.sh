@@ -29,6 +29,31 @@ target_guard() {
 		test_skip_all "LSM not attached; run \`shirudo init\` first"
 }
 
+# The bpf.enforcement init froze: all, own, or empty before init.
+bpf_enforcement() {
+	"$SHIRUDO_BIN" status --json 2>/dev/null | python3 -c '
+import json, sys
+print(json.load(sys.stdin).get("bpf_enforcement") or "")
+'
+}
+
+# A test of what the strict mode refuses to every other BPF user.
+strict_guard() {
+	[ "$(bpf_enforcement)" != own ] ||
+		test_skip_all "bpf.enforcement = own opens bpf() to other users"
+}
+
+# Whether the lsm/bpf gate still refuses what the mode keeps from root:
+# every unsigned load, or under bpf.enforcement = own a loader. Run from
+# testing/, where the helpers are.
+bpf_gate_live() {
+	if [ "$(bpf_enforcement)" = own ]; then
+		[ "$(./helper/test-bpf-own loader)" = "errno=13" ]
+	else
+		[ "$(./helper/test-bpf-load)" = "errno=13" ]
+	fi
+}
+
 # TPM startup can sleep before the task reaches its blocking FIFO open.
 fifo_release() {
 	python3 -c '

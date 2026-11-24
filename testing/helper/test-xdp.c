@@ -2,6 +2,7 @@
 /* Copyright (c) 2026 Authors of shirudo */
 
 #include <errno.h>
+#include <stdbool.h>
 #include <net/if.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +18,7 @@ int main(int argc, char **argv)
 	LIBBPF_OPTS(bpf_link_create_opts, opts, .flags = XDP_FLAGS_DRV_MODE);
 	__u32 ifindex, id = 0, after = 0;
 	int fd, ret;
+	bool own;
 
 	if (argc != 3)
 		return 2;
@@ -30,7 +32,12 @@ int main(int argc, char **argv)
 		printf("%u\n", id);
 		return 0;
 	}
-	if (strcmp(argv[1], "denied") || !id)
+	/*
+	 * Under bpf.enforcement = own, link commands pass lsm/bpf and only
+	 * the program's descriptor is refused.
+	 */
+	own = !strcmp(argv[1], "denied-own");
+	if ((strcmp(argv[1], "denied") && !own) || !id)
 		return 2;
 	fd = bpf_prog_get_fd_by_id(id);
 	if (fd >= 0) {
@@ -38,10 +45,13 @@ int main(int argc, char **argv)
 		fprintf(stderr, "XDP program descriptor acquisition was allowed\n");
 		return 1;
 	}
-	if (errno != EACCES ||
-	    bpf_link_create(-1, (int)ifindex, BPF_XDP, &opts) != -EACCES ||
-	    bpf_link_detach(-1) != -EACCES ||
-	    bpf_xdp_detach((int)ifindex, XDP_FLAGS_DRV_MODE, NULL) != -EBUSY)
+	if (errno != EACCES)
+		return 1;
+	if (!own &&
+	    (bpf_link_create(-1, (int)ifindex, BPF_XDP, &opts) != -EACCES ||
+	     bpf_link_detach(-1) != -EACCES))
+		return 1;
+	if (bpf_xdp_detach((int)ifindex, XDP_FLAGS_DRV_MODE, NULL) != -EBUSY)
 		return 1;
 	if (bpf_xdp_query_id((int)ifindex, XDP_FLAGS_DRV_MODE, &after))
 		return 1;

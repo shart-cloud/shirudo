@@ -127,6 +127,7 @@ testing/helper/test-upatch-serializer-pages
 testing/helper/test-signed-load
 testing/helper/test-upatch-link-lockdown
 testing/helper/test-xdp
+testing/helper/test-bpf-own
 testing/helper/test-exec-churn
 testing/end2end/exec-paths
 testing/end2end/policy-exec

@@ -159,6 +159,26 @@ Descriptors and pins
     program to a perf event without a ``bpf()`` command, to the same
     tasks.
 
+Shared BPF
+    With ``bpf.enforcement = own`` in the initrd bootstrap, the mode
+    ``init`` freezes in the identity map, ``lsm/bpf`` admits every
+    command that reaches an object through a descriptor, and the
+    descriptor hooks decide instead. ``lsm/bpf_prog_load`` records as
+    shirudo's each program a signed loader loads and each loader the
+    anchor vouches for, ``lsm/bpf_map_create`` each map a signed loader
+    or a task with authority creates, and ``lsm/bpf_map`` and
+    ``lsm/bpf_prog`` record what the bootstrap task opens, which is how
+    ``init`` claims its own objects after the gates attach.
+    ``lsm/bpf_map_free`` and ``lsm/bpf_prog_free`` drop an object as it
+    is freed. ``lsm/bpf_map`` and ``lsm/bpf_prog`` refuse a descriptor
+    of a recorded object to a task without authority, and the other
+    callers' objects are theirs. ``BPF_LINK_GET_FD_BY_ID`` and a loader
+    load stay reserved to authority, an LSM program load is refused to
+    every caller, and ``lsm/inode_permission`` and ``lsm/inode_create``
+    keep ``BPF_OBJ_GET`` and ``BPF_OBJ_PIN`` out of the private bpffs.
+    ``init`` attaches those five hooks only in this mode, and with
+    ``all`` shrinks the record ``shirudo_owned`` to one entry.
+
 The private bpffs and /run/shirudo
     The pins are the only reference that keeps the enforcement links and
     the upatch links attached once ``init`` exits. The inode hooks of
@@ -242,8 +262,13 @@ order:
    the recorder notes the mount, and freeze that record.
 #. Load ``seal`` on the shared maps, freeze its scratch map, and attach
    its twenty-nine hooks, then ``mmap_file`` and ``file_mprotect``.
+#. With ``bpf.enforcement = own``, attach ``bpf_map_create``,
+   ``bpf_map_free``, ``bpf_prog_free``, ``inode_create`` and
+   ``inode_permission``.
 #. Attach ``lsm/bpf_map``, then ``lsm/bpf_prog``, then
    ``lsm/bpf_prog_load``, then ``lsm/bpf``.
+#. With ``bpf.enforcement = own``, open every map and program of
+   ``bpf2`` and ``seal`` once by id, which records them as shirudo's.
 
 ``init`` pins every link as it attaches it, before the next fallible
 step. A link that is not pinned detaches when ``init`` exits, and a
@@ -327,7 +352,10 @@ Hooks in bpf2
        caller. Allows every call with ``kernel`` true and the read-only
        commands: map lookups, ``GET_NEXT_ID``, ``PROG_GET_FD_BY_ID``,
        ``BTF_GET_FD_BY_ID``, ``OBJ_GET_INFO_BY_FD``, ``PROG_QUERY``,
-       ``TASK_FD_QUERY``.
+       ``TASK_FD_QUERY``. With ``bpf.enforcement = own``, allows
+       every classified command that names its objects by descriptor
+       and refuses an unsigned loader to every caller, a signed one and
+       a link by id to a task without authority.
      - ``EACCES``: ``LoadNotLoader``, ``LoadUnsigned``,
        ``MapCreate``, ``MapWrite``, ``ProgRun``, ``ProgAttach``,
        ``ObjPin``, ``ObjGet``, ``BpfCommand``
@@ -335,20 +363,43 @@ Hooks in bpf2
    * - ``lsm/bpf_prog_load``
      - A userspace load the kernel did not verify, verified against
        another keyring kind than ``.bpf``, or with a non-zero keyring
-       serial other than the frozen one. Allows ``kernel`` true.
+       serial other than the frozen one. Allows ``kernel`` true. With
+       ``bpf.enforcement = own``, refuses so only loaders and LSM
+       programs, admits every other program, and records the programs
+       the anchor vouches for and those loaded with ``kernel`` true.
      - ``EACCES``: ``LoadUnverified``, ``LoadKeyringKind``,
        ``LoadKeyring`` (never reached: the kernel records serial 0 for
-       ``.bpf``)
+       ``.bpf``), ``LoadNotLoader`` for an LSM program
      - Closed: no frozen keyring serial refuses every load, uncounted.
    * - ``lsm/bpf_map``
-     - Every map descriptor to a task without authority.
+     - Every map descriptor to a task without authority. With
+       ``bpf.enforcement = own``, only a descriptor of a map recorded as
+       shirudo's, and records the maps the bootstrap task opens.
      - ``EACCES``: ``MapFdWrite`` (writable), ``ObjGet``
        (read-only)
-     - Closed.
+     - Closed. A full record refuses the bootstrap task's open,
+       ``ENOMEM``.
    * - ``lsm/bpf_prog``
      - An XDP program descriptor to a task without authority, including
        acquisition by program ID. Other program types stay allowed.
+       With ``bpf.enforcement = own``, a descriptor of any program
+       recorded as shirudo's instead, and records the programs the
+       bootstrap task opens.
      - ``EACCES``: ``ObjGet``
+     - Closed.
+   * - ``lsm/bpf_map_create``, ``lsm/bpf_map_free``,
+       ``lsm/bpf_prog_free``
+     - Attached with ``bpf.enforcement = own`` only. Refuse nothing:
+       record a map a signed loader or a task with authority creates,
+       and drop a freed map or program from the record.
+     - ``ENOMEM`` when the record is full, uncounted
+     - Closed: a map that cannot be recorded is not created.
+   * - ``lsm/inode_create``, ``lsm/inode_permission``
+     - Attached with ``bpf.enforcement = own`` only. A pin in the private
+       bpffs, and the permission check of a non-directory inode there,
+       which ``BPF_OBJ_GET`` makes without opening it, to a task without
+       authority.
+     - ``EPERM``: ``PinEntry``; ``EACCES``: ``ObjGet``
      - Closed.
    * - ``lsm/file_open``
      - Opening a non-directory inode of the private bpffs, through any
@@ -366,7 +417,9 @@ Hooks in bpf2
        ``DM_DEV_STATUS``, ``DM_DEV_WAIT``, ``DM_TABLE_DEPS``,
        ``DM_TABLE_STATUS``, ``DM_LIST_VERSIONS`` and
        ``DM_GET_TARGET_VERSION`` on the control device (10:236), to a
-       task without authority.
+       task without authority. With ``bpf.enforcement = own``,
+       ``PERF_EVENT_IOC_SET_BPF`` is allowed, since the program
+       descriptor it takes is what ``lsm/bpf_prog`` guards.
      - ``EACCES``: ``PerfAttach``, ``XattrHandle``. ``EPERM``
        for DM, uncounted
      - Closed: unknown DM commands are refused.

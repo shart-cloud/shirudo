@@ -33,32 +33,32 @@ trap restore EXIT
 
 # Sanity: enforcement is live before we start (unsigned load -> EACCES).
 test_expect_success 'baseline: unsigned userspace load is denied' '
-	[ "$(./$H)" = "errno=13" ]
+	bpf_gate_live
 '
 
 test_expect_success 'umount of the bpffs is denied and enforcement survives' '
 	umount "$B" 2>/dev/null
 	mountpoint -q "$B" &&
-	[ "$(./$H)" = "errno=13" ]
+	bpf_gate_live
 '
 
 test_expect_success 'lazy umount (MNT_DETACH) of the bpffs is denied' '
 	umount -l "$B" 2>/dev/null
 	mountpoint -q "$B" &&
-	[ "$(./$H)" = "errno=13" ]
+	bpf_gate_live
 '
 
 test_expect_success 'remount of the bpffs is denied' '
 	mount -o remount,rw "$B" 2>/dev/null
 	mountpoint -q "$B" &&
-	[ "$(./$H)" = "errno=13" ]
+	bpf_gate_live
 '
 
 test_expect_success 'mounting over the bpffs is denied' '
 	mount -t tmpfs none "$B" 2>/dev/null
 	# A successful shadow-mount would leave a tmpfs (not bpf) on top.
 	[ "$(findmnt -no FSTYPE "$B" | head -1)" = "bpf" ] &&
-	[ "$(./$H)" = "errno=13" ]
+	bpf_gate_live
 '
 
 test_done

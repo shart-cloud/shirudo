@@ -5,6 +5,8 @@
 cd "$(dirname "$0")/../.."
 . ./integration-lib.sh
 target_guard
+DENIED=denied
+[ "$(bpf_enforcement)" != own ] || DENIED=denied-own
 
 FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 H=./helper/test-xdp
@@ -151,7 +153,7 @@ test_xdp_success 'both host endpoints of separate cross-namespace pairs attach' 
 	[ ! -e "$B/$NAME/link_2" ] &&
 	[ "$(ip netns exec xdp-test-a "$H" query internal0)" = 0 ] &&
 	[ "$(ip netns exec xdp-test-a "$H" query internal1)" = 0 ] &&
-	before=$(objget_counter) && "$H" denied xdpa &&
+	before=$(objget_counter) && "$H" "$DENIED" xdpa &&
 	[ "$(objget_counter)" -gt "$before" ] &&
 	unload "$NAME" &&
 	[ "$("$H" query xdpa)" = 0 ] && [ "$("$H" query xdpc)" = 0 ] &&

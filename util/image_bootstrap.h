@@ -19,8 +19,10 @@ struct image_bootstrap {
 	size_t n_certificates;
 	__u8 runtime_root[32];
 	__u32 pcr;
+	__u32 bpf_enforcement;
 	bool have_root;
 	bool have_pcr;
+	bool have_bpf_enforcement;
 };
 
 bool image_path_valid(const char *path);

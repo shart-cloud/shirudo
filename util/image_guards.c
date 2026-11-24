@@ -150,6 +150,17 @@ shirudo_gate_guards[GATE_HOOK_COUNT] = {
 	},
 };
 
+const struct image_guard
+shirudo_own_guards[OWN_HOOK_COUNT] = {
+	{ "shirudo_lsm_bpf_map_create",
+	  BPFFS_DIR "/bpf2_bpf_map_create_link" },
+	{ "shirudo_lsm_bpf_map_free", BPFFS_DIR "/bpf2_bpf_map_free_link" },
+	{ "shirudo_lsm_bpf_prog_free", BPFFS_DIR "/bpf2_bpf_prog_free_link" },
+	{ "shirudo_lsm_inode_create", BPFFS_DIR "/bpf2_inode_create_link" },
+	{ "shirudo_lsm_inode_permission",
+	  BPFFS_DIR "/bpf2_inode_permission_link" },
+};
+
 /* Initial authenticated boot creates mappings before these guards exist. */
 int config_root_begin(const __u8 root[32],
 		      struct config_root_guard *guard)
@@ -404,17 +415,30 @@ int image_guards_ready(void)
 			.guards = shirudo_image_observer_guards,
 			.count = ARRAY_SIZE(shirudo_image_observer_guards),
 		},
+		/* Last, so that the strict mode leaves it out. */
+		{
+			.guards = shirudo_own_guards,
+			.count = ARRAY_SIZE(shirudo_own_guards),
+		},
 	};
 	__u32 map_ids[GUARD_MAP_COUNT] = {};
 	struct btf *kernel = NULL;
+	struct identity id = {};
 	__u32 kernel_id = 0;
+	size_t n_groups;
 	__u32 i, j;
 	int ret;
 
+	ret = identity_read(&id);
+	if (ret)
+		return ret;
 	ret = guard_map_ids(map_ids);
 	if (ret)
 		return ret;
-	for (i = 0; i < ARRAY_SIZE(groups); i++) {
+	n_groups = ARRAY_SIZE(groups);
+	if (id.bpf_enforcement != BPF_ENFORCE_OWN)
+		n_groups--;
+	for (i = 0; i < n_groups; i++) {
 		for (j = 0; j < groups[i].count; j++) {
 			const struct image_guard *guard =
 				&groups[i].guards[j];

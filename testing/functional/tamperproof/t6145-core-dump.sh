@@ -62,7 +62,7 @@ test_expect_success 'the dump that lost its authority is counted as SealCoreDump
 	[ "$(counter SealCoreDump)" -ge $((dumps + 2)) ]
 '
 test_expect_success 'enforcement holds after the dumps' '
-	[ "$(helper/test-bpf-load)" != loaded ] &&
+	bpf_gate_live &&
 	"$SHIRUDO_BIN" status 2>/dev/null | grep -q "LsmAttached *OK"
 '
 test_done

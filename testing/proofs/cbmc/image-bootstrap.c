@@ -51,6 +51,8 @@ void harness(void)
 			 "a short line cannot add a certificate");
 	__CPROVER_assert(!boot.have_pcr,
 			 "a short line cannot set a PCR");
+	__CPROVER_assert(!boot.have_bpf_enforcement,
+			 "a short line cannot choose the BPF enforcement");
 	__CPROVER_assert(boot.have_root == had_root &&
 			 !boot.runtime[0] == !had_runtime,
 			 "a short line cannot change the runtime");

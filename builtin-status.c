@@ -22,6 +22,7 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 
+#include <shirudo/enforcement.h>
 #include <shirudo/misc.h>
 #include <shirudo/string.h>
 #include <shirudo/upatch.h>
@@ -1232,6 +1233,7 @@ struct status_view {
 	key_serial_t		keyring_serial;
 	key_serial_t		keyring_pinned;
 	const char		*keyring_mode;
+	const char		*bpf_enforcement;	/* NULL before init */
 	bool			keyring_present;
 	struct trusted_set	certs;
 	int			certs_rc;
@@ -1333,6 +1335,11 @@ static bool lsm_link_pinned(void)
 	return fd >= 0;
 }
 
+static const char *bpf_enforcement_name(__u32 mode)
+{
+	return mode == BPF_ENFORCE_OWN ? "own" : "all";
+}
+
 static void status_read_keyrings(struct status_view *v)
 {
 	struct identity ident = {};
@@ -1347,6 +1354,8 @@ static void status_read_keyrings(struct status_view *v)
 	v->keyring_serial = v->keyring_pinned >= 1 ? keyring_bpf_serial() :
 			    -ENOKEY;
 	v->keyring_mode = v->keyring_serial >= 0 ? "bpf" : "none";
+	if (v->keyring_pinned >= 1)
+		v->bpf_enforcement = bpf_enforcement_name(ident.bpf_enforcement);
 	v->keyring_present = v->keyring_serial >= 0;
 	/*
 	 * The certificates the keyring of that kind would have been given,
@@ -1599,6 +1608,10 @@ static void emit_anchor_json(struct json_emit *e, const struct status_view *v)
 			     v->keyring_serial == v->keyring_pinned);
 	else
 		json_kv_null(e, "keyring_serial_matches");
+	if (v->bpf_enforcement)
+		json_kv_string(e, "bpf_enforcement", v->bpf_enforcement);
+	else
+		json_kv_null(e, "bpf_enforcement");
 }
 
 static void emit_certs_json(struct json_emit *e, const struct status_view *v)
@@ -1919,6 +1932,8 @@ static void print_summary(const struct status_view *v, const char *verdict,
 	else
 		printf("%-22s %s\n", "Status:", verdict);
 	printf("%-22s %s\n", "Version ID:", shirudo_version_id);
+	if (v->bpf_enforcement)
+		printf("%-22s %s\n", "BPF enforcement:", v->bpf_enforcement);
 	printf("\n");
 }
 

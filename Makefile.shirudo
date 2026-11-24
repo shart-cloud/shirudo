@@ -821,6 +821,7 @@ TEST_HELPERS := $(VERITY_TEST_HELPERS) \
                 testing/helper/test-signed-load \
                 testing/helper/test-upatch-link-lockdown \
                 testing/helper/test-xdp \
+                testing/helper/test-bpf-own \
                 testing/helper/test-exec-churn \
 		testing/end2end/exec-paths \
 		testing/end2end/policy-exec
@@ -970,6 +971,10 @@ testing/helper/test-upatch-link-lockdown: testing/helper/test-upatch-link-lockdo
 	$(Q)$(CC) $(CFLAGS) -I$(BPF_UAPI_INCLUDE) -o $@ $^
 
 testing/helper/test-xdp: testing/helper/test-xdp.c $(LIBBPF_A)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBELF_LIBS) $(ZLIB_LIBS)
+
+testing/helper/test-bpf-own: testing/helper/test-bpf-own.c $(LIBBPF_A)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBELF_LIBS) $(ZLIB_LIBS)
 

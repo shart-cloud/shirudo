@@ -13,6 +13,7 @@
 #define MOUNT_HOOK_COUNT 5
 #define OBSERVER_HOOK_COUNT 10
 #define IMAGE_OBSERVER_HOOK_COUNT 4
+#define OWN_HOOK_COUNT 5
 
 struct image_guard {
 	const char *prog;
@@ -44,6 +45,9 @@ extern const struct image_guard
 	shirudo_observer_guards[OBSERVER_HOOK_COUNT];
 extern const struct image_guard
 	shirudo_gate_guards[GATE_HOOK_COUNT];
+/* Attached only when bpf.enforcement is own. */
+extern const struct image_guard
+	shirudo_own_guards[OWN_HOOK_COUNT];
 
 struct config_root_guard {
 	int map_fd;

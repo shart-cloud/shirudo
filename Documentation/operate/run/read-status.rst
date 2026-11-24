@@ -39,6 +39,7 @@ Print the report
       Roles:                 target
       Status:                ok
       Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
+      BPF enforcement:       all
 
       Conditions:
         TYPE               STATUS  DETAIL
@@ -94,6 +95,7 @@ line; a section unfolds on its own when its condition is not ``OK``.
    Roles:                 target
    Status:                ok
    Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
+   BPF enforcement:       all
 
    Conditions:
      TYPE               STATUS  DETAIL
@@ -200,6 +202,12 @@ Header
 ``Version ID``
     The identifier of the shirudo build that runs. Compare it with the
     build you deployed, see :doc:`/operate/maintain/upgrade`.
+
+``BPF enforcement``
+    ``all`` or ``own``, the ``bpf.enforcement`` of the initrd bootstrap
+    that ``init`` froze this boot. Absent before ``init``. Under ``own``
+    other software runs BPF of its own beside shirudo's, see
+    :ref:`interop-bpf-own`.
 
 Conditions
 ~~~~~~~~~~

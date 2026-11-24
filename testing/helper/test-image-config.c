@@ -26,6 +26,7 @@ static int read_bootstrap(int argc, char **argv)
 		hex_encode(boot.runtime_root, 32, root);
 		printf("runtime=%s\nroot=%s\nconfig=%s\npcr=%u\n",
 		       boot.runtime, root, boot.config, boot.pcr);
+		printf("bpf_enforcement=%u\n", boot.bpf_enforcement);
 		printf("certificates=%zu\n", boot.n_certificates);
 		for (i = 0; i < boot.n_certificates; i++)
 			printf("certificate=%s\n", boot.certificates[i]);

@@ -496,6 +496,7 @@ Boot and verify
       Roles:                 target
       Status:                ok
       Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
+      BPF enforcement:       all
 
       Conditions:
         TYPE               STATUS  DETAIL

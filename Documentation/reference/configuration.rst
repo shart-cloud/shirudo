@@ -119,6 +119,15 @@ Bootstrap keys
      - Allowed
      - Required, or ``config.pcr``
      - Extend the config NvPCR, NV index ``0x01818E04``, instead of a PCR
+   * - ``bpf.enforcement``
+     - ``all`` or ``own``
+     - Allowed
+     - Refused
+     - Whose BPF the guards keep: ``all`` (the default) reserves all of
+       ``bpf()`` to signed loaders and shirudo's runtime, ``own`` lets
+       other software load and attach BPF of its own and keeps only
+       shirudo's programs, maps, links and pins from it. See
+       :ref:`interop-bpf-own`
 
 The runtime bootstrap's ``config.*`` values are the ones in effect: the
 root file system's run of ``init`` and every later command read only the
@@ -126,11 +135,16 @@ runtime bootstrap.
 
 Bootstrap rules:
 
-- A ``runtime.*`` key in the runtime bootstrap is refused with
-  ``EINVAL``.
-- A ``config.*`` or ``runtime.*`` key not in the table is refused with
-  ``EINVAL``. A repeated ``runtime.image`` or ``runtime.root_hash`` is
-  refused with ``EINVAL``.
+- A ``runtime.*`` or ``bpf.*`` key in the runtime bootstrap is refused
+  with ``EINVAL``.
+- A ``config.*``, ``runtime.*`` or ``bpf.*`` key not in the table, or a
+  ``bpf.enforcement`` value other than ``all`` and ``own``, is refused
+  with ``EINVAL``. A repeated ``runtime.image``, ``runtime.root_hash`` or
+  ``bpf.enforcement`` is refused with ``EINVAL``.
+- ``bpf.enforcement`` sits in the initrd bootstrap, inside the signed
+  UKI, so that the PCR 11 value a verifier pins covers the mode. root
+  cannot change it before the next boot, and ``init`` freezes it in the
+  identity map, where ``shirudo status`` reads it back.
 - A repeated ``config.verification_key`` adds another allowed certificate.
   A repeated path is refused with ``EEXIST`` and more than 16 entries
   with ``E2BIG``. Runtime loading also rejects duplicate public keys and

@@ -196,6 +196,7 @@ Check enforcement
       Roles:                 target
       Status:                ok
       Version ID:            414d0c75238fcc31b1d60ce78b4943a8b450f49556a5cb255d62392061b87ccf
+      BPF enforcement:       all
 
       Conditions:
         TYPE               STATUS  DETAIL

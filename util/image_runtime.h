@@ -14,6 +14,11 @@ struct trusted_set;
 struct config_update *image_update_context(void);
 int image_bootstrap_load(void);
 const __u8 *image_runtime_root(void);
+/*
+ * BPF_ENFORCE_ALL or BPF_ENFORCE_OWN: the initrd bootstrap's
+ * bpf.enforcement in the initrd, the identity map's after it.
+ */
+__u32 image_bpf_enforcement(void);
 int image_runtime_mount(void);
 int image_boot_keys(struct trusted_set *set);
 int image_boot_keys_close(void);

@@ -38,9 +38,9 @@ Every entry has a stable ID that commits, issues and other pages cite:
      - Assumptions the goals depend on, and whether shirudo checks them.
    * - ADV-A to ADV-G
      - Adversaries.
-   * - T1 to T15
+   * - T1 to T16
      - Threats shirudo addresses, each with a fact box.
-   * - R1 to R23
+   * - R1 to R25
      - Residual risks: known and bounded limits of the mechanisms.
    * - U1 to U20
      - Threats to resolve: gaps in the code that are not closed yet.
@@ -85,8 +85,10 @@ Security goals
      - After ``init`` has attached the gates, every BPF program that a
        userspace process loads through ``bpf()`` is a signed loader the
        kernel verified against the sealed ``.bpf`` keyring, or a
-       program such a loader loads.
-     - T1, T4
+       program such a loader loads. Under ``bpf.enforcement = own``,
+       every loader and LSM program, and other programs are their
+       owner's but reach none of shirudo's objects.
+     - T1, T4, T16
    * - G2
      - The enforcement programs and the loaded upatches stay attached
        until shirudo removes them or the target reboots.
@@ -112,8 +114,10 @@ Security goals
      - T7, T8, T11
    * - G8
      - No process without runtime authority reads or drains the maps
-       and pins of shirudo and its upatches.
-     - T13
+       and pins of shirudo and its upatches. Under
+       ``bpf.enforcement = own``, none takes a descriptor of them
+       (R25).
+     - T13, T16
 
 The goals hold only together with the assumptions below. None of them
 says that a upatch is correct: shirudo establishes provenance, not
@@ -1615,6 +1619,56 @@ load and unload are measured as ``java_load`` and
    ``Shirudo.Events``
 :Residual: R2, R24
 
+.. _tm-t16:
+
+T16 Reaching shirudo's objects when BPF is shared
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A node that runs a BPF datapath or agent boots with
+``bpf.enforcement = own`` in its initrd bootstrap, and ``init`` freezes
+the mode in the identity map. ``lsm/bpf`` then admits every command that
+reaches an object through a descriptor, so that Cilium, Tetragon and the
+container runtime load, attach and pin BPF of their own. Root holds the
+same commands, and its next move is to aim them at shirudo's objects:
+detach or update a guard's link, write a guard map, test-run a
+serializer, attach an ``fentry`` or a ``freplace`` program to a guard,
+or load a loader of its own choosing.
+
+Every such command needs a descriptor of the object, and only the hooks
+that hand out a descriptor decide who gets one. ``lsm/bpf_prog_load``
+records as shirudo's each program a signed loader loads, together with
+the loaders the anchor vouches for, and ``lsm/bpf_map_create`` each map a
+signed loader or the runtime creates; ``init`` opens each object of its
+own bootstrap once after the gates attach, and the bootstrap task's
+opens record them. ``lsm/bpf_map_free`` and ``lsm/bpf_prog_free`` drop
+an object as the kernel frees it, before its address can name another.
+``lsm/bpf_map`` and ``lsm/bpf_prog`` refuse a descriptor of a recorded
+object to every task without runtime authority, by id and by pin alike.
+No hook sees a link descriptor handed out, so ``BPF_LINK_GET_FD_BY_ID``
+stays shirudo's, ``lsm/inode_permission`` refuses the pins of the
+private bpffs to ``BPF_OBJ_GET``, and ``lsm/inode_create`` keeps
+``BPF_OBJ_PIN`` out of it. A loader stays shirudo's to load, since what
+it loads runs in kernel context, where the hooks admit it, and outside
+the register; an LSM program stays refused, since it would decide at
+the hooks the guards decide at and the xattr kfuncs would let it
+rewrite the seal's labels. A full record refuses the object it cannot
+hold.
+
+.. rst-class:: facts
+
+:Adversary: ADV-B, root on the target without the signing key, on a
+   target booted with ``bpf.enforcement = own``
+:Enforced at: ``lsm/bpf``, ``lsm/bpf_prog_load``, ``lsm/bpf_map``,
+   ``lsm/bpf_prog``, ``lsm/inode_permission``, ``lsm/inode_create``;
+   ``lsm/bpf_map_create``, ``lsm/bpf_map_free`` and
+   ``lsm/bpf_prog_free`` keep the record
+:Refusal: ``EACCES`` from ``bpf()``; ``EPERM`` for a pin in the private
+   bpffs
+:Counters: ``ObjGet``, ``MapFdWrite``, ``PinEntry``, ``LoadNotLoader``,
+   ``LoadUnsigned``, ``ProgRun``
+:Tests: ``t6158``
+:Residual: R25
+
 Residual risks
 --------------
 
@@ -1992,6 +2046,22 @@ R24 A Java agent reaches only the JVMs its options reach
    the applications that start with it, not a boundary against root,
    which only a BPF upatch is. Detection: a JVM's ``-javaagent``
    arguments, ``jcmd <pid> VM.command_line``; none from shirudo.
+
+R25 bpf.enforcement = own returns BPF to root
+   Under ``bpf.enforcement = own``, T16 keeps shirudo's programs, maps,
+   links and pins from root, and root runs BPF of its own again. A
+   tracing program reads kernel memory, among it the values of the
+   identity map, the guard maps and the upatch maps, which G8 keeps
+   from root in the default mode; the identity map holds the NV
+   writer's seed, and ``lsm/tpm_command`` still refuses an extend of the
+   register to every task but shirudo. Error injection,
+   ``bpf_override_return`` or an ``fmod_ret`` program, makes a kernel
+   function fail, so that a shirudo command or a guard's own operation
+   fails and refuses rather than passes, as a kill would. A free hook
+   that cannot take the record's lock leaves the address recorded, and
+   another caller's object that later takes the address is refused to
+   it. The mode is the initrd bootstrap's, inside the UKI. Detection: the PCR 11 value a
+   verifier pins, and ``bpf_enforcement`` in ``shirudo status --json``.
 
 Threats to resolve
 ------------------

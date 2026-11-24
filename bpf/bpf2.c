@@ -24,6 +24,134 @@ static __always_inline int shirudo_self_or_deny(enum tamper_point point)
 	return 0;
 }
 
+static __always_inline bool shirudo_enforces_own(const struct sb_id *id)
+{
+	return id && id->bpf_enforcement == BPF_ENFORCE_OWN;
+}
+
+/*
+ * With bpf.enforcement = own, the BPF objects that are shirudo's: what
+ * its signed loaders load and create, the maps its runtime creates, and
+ * what init claimed of its own bootstrap. Keyed by the object's address,
+ * which the free hooks clear before the kernel can hand it out again.
+ * init shrinks the map to one entry when all of BPF is shirudo's.
+ */
+#define OWNED_MAX	8192
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, OWNED_MAX);
+	__type(key, __u64);
+	__type(value, __u8);
+} shirudo_owned SEC(".maps");
+
+static __always_inline bool shirudo_owned_object(const void *object)
+{
+	__u64 key = (__u64)object;
+
+	return bpf_map_lookup_elem(&shirudo_owned, &key);
+}
+
+/* A full table refuses the object rather than leave it unguarded. */
+static __always_inline int shirudo_own_object(const void *object)
+{
+	__u64 key = (__u64)object;
+	__u8 owned = 1;
+
+	if (bpf_map_update_elem(&shirudo_owned, &key, &owned, BPF_ANY))
+		return -ENOMEM;
+	return 0;
+}
+
+static __always_inline void shirudo_disown_object(const void *object)
+{
+	__u64 key = (__u64)object;
+
+	bpf_map_delete_elem(&shirudo_owned, &key);
+}
+
+/*
+ * A descriptor of one of shirudo's objects is shirudo's alone. init's
+ * bootstrap task claims the objects it made before the tracking hooks
+ * were attached by opening each of them once.
+ */
+static __always_inline int shirudo_owned_fd(const struct sb_id *id,
+					    const void *object,
+					    enum tamper_point point)
+{
+	if (shirudo_bootstrap_task())
+		return shirudo_own_object(object);
+	if (!shirudo_owned_object(object) || shirudo_task_is_self(id))
+		return 0;
+	return shirudo_tamper_deny(point, -EACCES);
+}
+
+/*
+ * bpf.enforcement = own. Every command that reaches an object through a
+ * descriptor is open: lsm/bpf_map and lsm/bpf_prog keep the descriptors
+ * of shirudo's maps and programs to shirudo, and lsm/inode_permission
+ * the pins they could be opened by. A link descriptor passes no hook, so
+ * a link by id stays shirudo's, or root could detach its guards. A
+ * loader is shirudo's to load, as running one is: what it loads runs in
+ * kernel context, past every check here, and unmeasured. Every command
+ * not classified here stays refused.
+ */
+static __always_inline int shirudo_bpf_cmd_own(int cmd, union bpf_attr *attr)
+{
+	switch (cmd) {
+	case BPF_PROG_LOAD:
+		if (BPF_CORE_READ(attr, prog_type) != BPF_PROG_TYPE_SYSCALL)
+			return 0;
+		if (BPF_CORE_READ(attr, signature_size) == 0)
+			return shirudo_tamper_deny(TAMPER_LOAD_UNSIGNED,
+						   -EACCES);
+		return shirudo_self_or_deny(TAMPER_PROG_RUN);
+
+	case BPF_LINK_GET_FD_BY_ID:
+		return shirudo_self_or_deny(TAMPER_OBJ_GET);
+
+	case BPF_MAP_CREATE:
+	case BPF_MAP_LOOKUP_ELEM:
+	case BPF_MAP_UPDATE_ELEM:
+	case BPF_MAP_DELETE_ELEM:
+	case BPF_MAP_GET_NEXT_KEY:
+	case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
+	case BPF_MAP_FREEZE:
+	case BPF_MAP_LOOKUP_BATCH:
+	case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
+	case BPF_MAP_UPDATE_BATCH:
+	case BPF_MAP_DELETE_BATCH:
+	case BPF_MAP_GET_FD_BY_ID:
+	case BPF_MAP_GET_NEXT_ID:
+	case BPF_PROG_ATTACH:
+	case BPF_PROG_DETACH:
+	case BPF_PROG_TEST_RUN:
+	case BPF_PROG_QUERY:
+	case BPF_PROG_GET_NEXT_ID:
+	case BPF_PROG_GET_FD_BY_ID:
+	case BPF_PROG_BIND_MAP:
+	case BPF_OBJ_PIN:
+	case BPF_OBJ_GET:
+	case BPF_OBJ_GET_INFO_BY_FD:
+	case BPF_RAW_TRACEPOINT_OPEN:
+	case BPF_BTF_LOAD:
+	case BPF_BTF_GET_FD_BY_ID:
+	case BPF_BTF_GET_NEXT_ID:
+	case BPF_TASK_FD_QUERY:
+	case BPF_LINK_CREATE:
+	case BPF_LINK_UPDATE:
+	case BPF_LINK_DETACH:
+	case BPF_LINK_GET_NEXT_ID:
+	case BPF_ITER_CREATE:
+	case BPF_ENABLE_STATS:
+	case BPF_TOKEN_CREATE:
+		return 0;
+
+	default:
+		return shirudo_tamper_deny(TAMPER_BPF_CMD, -EACCES);
+	}
+}
+
 SEC("lsm/bpf")
 int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 	     unsigned int size, bool kernel, int ret)
@@ -34,6 +162,8 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 		return ret;
 	if (kernel)
 		return 0;
+	if (shirudo_enforces_own(shirudo_policy()))
+		return shirudo_bpf_cmd_own(cmd, attr);
 
 	switch (cmd) {
 	case BPF_PROG_LOAD:
@@ -140,21 +270,118 @@ SEC("lsm/bpf_map")
 int BPF_PROG(shirudo_lsm_bpf_map, struct bpf_map *map, fmode_t fmode,
 	     int ret)
 {
+	struct sb_id *id;
+
 	if (ret)
 		return ret;
+	id = shirudo_policy();
+	if (shirudo_enforces_own(id))
+		return shirudo_owned_fd(id, map, fmode & FMODE_WRITE ?
+					TAMPER_MAP_FD : TAMPER_OBJ_GET);
 	if (fmode & FMODE_WRITE)
 		return shirudo_self_or_deny(TAMPER_MAP_FD);
 	return shirudo_self_or_deny(TAMPER_OBJ_GET);
 }
 
-/* XDP descriptors also authorize netlink attachment, outside lsm/bpf. */
+/*
+ * XDP descriptors also authorize netlink attachment, outside lsm/bpf.
+ * Under bpf.enforcement = own, a program descriptor is also what an
+ * attachment, a test run, a freplace or an fentry on the program needs.
+ */
 SEC("lsm/bpf_prog")
 int BPF_PROG(shirudo_lsm_bpf_prog, struct bpf_prog *prog, int ret)
 {
+	struct sb_id *id;
+
 	if (ret)
 		return ret;
+	id = shirudo_policy();
+	if (shirudo_enforces_own(id))
+		return shirudo_owned_fd(id, prog, TAMPER_OBJ_GET);
 	if (BPF_CORE_READ(prog, type) == BPF_PROG_TYPE_XDP)
 		return shirudo_self_or_deny(TAMPER_OBJ_GET);
+	return 0;
+}
+
+/*
+ * The tracking hooks of bpf.enforcement = own, attached only in that
+ * mode and before the gates: a map a signed loader or the runtime
+ * creates is shirudo's, and an object leaves the table as it is freed.
+ */
+SEC("lsm/bpf_map_create")
+int BPF_PROG(shirudo_lsm_bpf_map_create, struct bpf_map *map,
+	     union bpf_attr *attr, struct bpf_token *token, bool kernel,
+	     int ret)
+{
+	struct sb_id *id;
+
+	if (ret)
+		return ret;
+	id = shirudo_policy();
+	if (!shirudo_enforces_own(id))
+		return 0;
+	if (!kernel && !shirudo_task_is_self(id))
+		return 0;
+	return shirudo_own_object(map);
+}
+
+SEC("lsm/bpf_map_free")
+void BPF_PROG(shirudo_lsm_bpf_map_free, struct bpf_map *map)
+{
+	shirudo_disown_object(map);
+}
+
+SEC("lsm/bpf_prog_free")
+void BPF_PROG(shirudo_lsm_bpf_prog_free, struct bpf_prog *prog)
+{
+	shirudo_disown_object(prog);
+}
+
+/*
+ * Three ways to fail, each counted apart: no verified signature on the
+ * program, a signature verified against a keyring of the wrong kind, or
+ * against a keyring of the right kind that is not the one init froze.
+ * TAMPER_MAX for a program the anchor vouches for.
+ */
+static __always_inline enum tamper_point
+shirudo_anchor_refusal(struct bpf_prog *prog, const struct sb_id *id)
+{
+	__u32 verdict, ktype;
+	__s32 serial;
+
+	verdict = BPF_CORE_READ(prog, aux, sig.verdict);
+	ktype   = BPF_CORE_READ(prog, aux, sig.keyring_type);
+	serial  = BPF_CORE_READ(prog, aux, sig.keyring_serial);
+
+	if (verdict != BPF_SIG_VERIFIED)
+		return TAMPER_LOAD_UNVERIFIED;
+	if (ktype != BPF_SIG_KEYRING_BPF)
+		return TAMPER_LOAD_KEYRING_KIND;
+	/* The kernel singleton is recorded without a serial on some loads. */
+	if (serial && serial != id->keyring_serial)
+		return TAMPER_LOAD_KEYRING;
+	return TAMPER_MAX;
+}
+
+/*
+ * bpf.enforcement = own: a program the anchor vouches for is shirudo's,
+ * a loader it does not vouch for is refused as in the strict mode, and
+ * every other program is its owner's. An LSM program stays refused: it
+ * decides at the hooks the guards decide at, and the xattr kfuncs would
+ * hand it the seal's labels to rewrite.
+ */
+static __always_inline int shirudo_admit_own(struct bpf_prog *prog,
+					     const struct sb_id *id)
+{
+	enum tamper_point point = shirudo_anchor_refusal(prog, id);
+	__u32 type = BPF_CORE_READ(prog, type);
+
+	if (point == TAMPER_MAX)
+		return shirudo_own_object(prog);
+	if (type == BPF_PROG_TYPE_SYSCALL)
+		return shirudo_tamper_deny(point, -EACCES);
+	if (type == BPF_PROG_TYPE_LSM)
+		return shirudo_tamper_deny(TAMPER_LOAD_NOT_LOADER, -EACCES);
 	return 0;
 }
 
@@ -164,7 +391,7 @@ int BPF_PROG(shirudo_lsm_bpf_prog, struct bpf_prog *prog, int ret)
  * recorded the verdict on prog->aux->sig -- so the fields read here are
  * final. A userspace load is admitted only if the kernel verified it
  * against exactly shirudo's own sealed keyring; every other program is
- * denied, fail-closed.
+ * denied, fail-closed, except as shirudo_admit_own() lets one through.
  *
  * kernel == true means the load originates from inside an already-vetted
  * signed loader running in kernel context; those are always allowed
@@ -175,44 +402,27 @@ int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
 	     union bpf_attr *attr, struct bpf_token *token,
 	     bool kernel, int ret)
 {
+	enum tamper_point point;
 	struct sb_id *id;
-	__u32 zero = 0, verdict, ktype;
-	__s32 serial;
 
 	if (ret)
 		return ret;
+	id = shirudo_policy();
 	if (kernel)
-		return 0;
-
+		return shirudo_enforces_own(id) ? shirudo_own_object(prog) : 0;
 	/*
 	 * Fail closed if the identity record is missing or carries no
 	 * keyring serial: without the trust anchor there is no way to tell
 	 * a shirudo-signed load from an attacker's, so admit nothing.
 	 */
-	id = bpf_map_lookup_elem(&shirudo_bpffs_sb, &zero);
 	if (!id || id->keyring_serial == 0)
 		return -EACCES;
+	if (shirudo_enforces_own(id))
+		return shirudo_admit_own(prog, id);
 
-	verdict = BPF_CORE_READ(prog, aux, sig.verdict);
-	ktype   = BPF_CORE_READ(prog, aux, sig.keyring_type);
-	serial  = BPF_CORE_READ(prog, aux, sig.keyring_serial);
-
-	/*
-	 * Three ways to fail, each counted apart: no verified signature
-	 * on the program, a signature verified against a keyring of the
-	 * wrong kind, or against a keyring of the right kind that is not
-	 * the one init froze.
-	 */
-	if (verdict != BPF_SIG_VERIFIED)
-		return shirudo_tamper_deny(TAMPER_LOAD_UNVERIFIED,
-					   -EACCES);
-	if (ktype != BPF_SIG_KEYRING_BPF)
-		return shirudo_tamper_deny(TAMPER_LOAD_KEYRING_KIND,
-					   -EACCES);
-	/* The kernel singleton is recorded without a serial on some loads. */
-	if (serial && serial != id->keyring_serial)
-		return shirudo_tamper_deny(TAMPER_LOAD_KEYRING, -EACCES);
-
+	point = shirudo_anchor_refusal(prog, id);
+	if (point != TAMPER_MAX)
+		return shirudo_tamper_deny(point, -EACCES);
 	return 0;
 }
 
@@ -447,6 +657,48 @@ int BPF_PROG(shirudo_lsm_inode_link, const struct mnt_idmap *idmap,
 		return ret;
 	return shirudo_bpffs_guard(BPF_CORE_READ(dir, i_sb, s_dev),
 				   TAMPER_PIN_ENTRY);
+}
+
+/*
+ * The private bpffs hooks of bpf.enforcement = own, where BPF_OBJ_PIN
+ * and BPF_OBJ_GET are open to every caller. A pin is created through
+ * inode_create, and BPF_OBJ_GET checks the pin's permission without
+ * opening it, so neither passes the file_open guard.
+ */
+static __always_inline bool shirudo_bpffs_inode(const struct sb_id *id,
+						struct inode *inode)
+{
+	return id && id->sb_dev &&
+	       BPF_CORE_READ(inode, i_sb, s_dev) == id->sb_dev;
+}
+
+SEC("lsm/inode_create")
+int BPF_PROG(shirudo_lsm_inode_create, struct mnt_idmap *idmap,
+	     struct inode *dir, struct dentry *dentry, umode_t mode, int ret)
+{
+	struct sb_id *id;
+
+	if (ret)
+		return ret;
+	id = shirudo_policy();
+	if (!shirudo_bpffs_inode(id, dir) || shirudo_task_is_self(id))
+		return 0;
+	return shirudo_tamper_deny(TAMPER_PIN_ENTRY, -EPERM);
+}
+
+SEC("lsm/inode_permission")
+int BPF_PROG(shirudo_lsm_inode_permission, struct mnt_idmap *idmap,
+	     struct inode *inode, int mask, int ret)
+{
+	struct sb_id *id;
+
+	if (ret)
+		return ret;
+	id = shirudo_policy();
+	if (!shirudo_bpffs_inode(id, inode) ||
+	    (BPF_CORE_READ(inode, i_mode) & S_IFMT) == S_IFDIR)
+		return 0;
+	return shirudo_self_or_deny(TAMPER_OBJ_GET);
 }
 
 /*
@@ -1090,7 +1342,9 @@ static __always_inline int shirudo_dm_ioctl(struct file *file,
  * PERF_EVENT_IOC_SET_BPF binds a program to a perf event without a bpf()
  * command, and a program's fd is root's for the asking by id: a kprobe
  * program a signed loader created would run at a probe of root's own.
- * Keep it to the caller BPF_LINK_CREATE is kept to.
+ * Keep it to the caller BPF_LINK_CREATE is kept to: under
+ * bpf.enforcement = own, every caller, since lsm/bpf_prog keeps the
+ * descriptors of shirudo's programs to shirudo.
  */
 #define XFS_SUPER_MAGIC		0x58465342
 #define XFS_IOC_ATTRMULTI_NR	123
@@ -1114,8 +1368,11 @@ static __always_inline int shirudo_ioctl(struct file *file, unsigned int cmd,
 {
 	if (ret)
 		return ret;
-	if (cmd == PERF_EVENT_IOC_SET_BPF)
+	if (cmd == PERF_EVENT_IOC_SET_BPF) {
+		if (shirudo_enforces_own(shirudo_policy()))
+			return 0;
 		return shirudo_self_or_deny(TAMPER_PERF_ATTACH);
+	}
 	if (xfs_attrmulti(file, cmd))
 		return shirudo_self_or_deny(TAMPER_XATTR_HANDLE);
 	return shirudo_dm_ioctl(file, cmd, ret);

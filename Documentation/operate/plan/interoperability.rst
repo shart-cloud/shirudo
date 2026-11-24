@@ -44,7 +44,12 @@ Other BPF users
    Keep BPF-based agents, network plugins and tracing tools off
    enforcing targets, or ship what they do as upatches
    (:doc:`/upatches/index`). Run one-off investigations with bcc or
-   bpftrace on a host that does not enforce.
+   bpftrace on a host that does not enforce. Where they must share the
+   host, boot it with ``bpf.enforcement = own``, see
+   `Sharing BPF with other software`_.
+
+This section and its tables describe the default,
+``bpf.enforcement = all``.
 
 Each refused call fails with ``EACCES`` (``Permission denied``). The
 program load rows apply to every task, the others to tasks without
@@ -134,6 +139,120 @@ What common software sees:
      - The program load is refused.
    * - systemd
      - Starts units without its BPF-based settings, see the next section.
+
+.. _interop-bpf-own:
+
+Sharing BPF with other software
+-------------------------------
+
+:Mechanism: With ``bpf.enforcement = own`` in the initrd bootstrap
+   (:doc:`/reference/configuration`), ``lsm/bpf`` lets every caller
+   load, create, attach, pin and run BPF of its own and keeps only
+   shirudo's objects from it. ``lsm/bpf_prog_load`` records each program
+   a signed loader loads, and ``lsm/bpf_map_create`` each map a signed
+   loader or the runtime creates, as shirudo's; ``init`` claims the
+   objects of its own bootstrap. ``lsm/bpf_map`` and ``lsm/bpf_prog``
+   then refuse a descriptor of those objects to every task without
+   runtime authority, and with no descriptor there is nothing to
+   update, detach, replace, test-run, trace or attach elsewhere.
+   ``lsm/inode_permission`` refuses the pins of the private bpffs to
+   ``BPF_OBJ_GET``, and ``lsm/inode_create`` refuses a pin of another
+   caller's there. ``lsm/bpf_map_free`` and ``lsm/bpf_prog_free`` drop
+   an object from the record as the kernel frees it. Every other guard
+   stays as it is: the seal, the keyrings, the TPM, the mounts,
+   lockdown, kexec, uprobes on the runtime and the task marks.
+:Still refused: The calls in the table below fail with ``EACCES``, a
+   pin in the private bpffs with ``EPERM``.
+:What it costs: Root runs BPF code of its own again. It cannot change
+   shirudo's programs, maps or links, but it can read kernel memory,
+   among it the maps of shirudo and its upatches, which G8 in
+   :doc:`/security/threat-model` keeps from it in the default mode, and
+   it can refuse operations through error injection, which slows or
+   fails shirudo's commands rather than passing them (R25).
+:What to do: Choose the mode per host: ``all`` for a host that runs
+   nothing but upatches, ``own`` for a node that also runs a BPF
+   datapath or agent. A verifier checks the mode in the PCR 11 value it
+   pins (:doc:`/operate/run/attest`), and ``shirudo status`` prints it
+   as ``BPF enforcement:`` and as ``bpf_enforcement`` in JSON.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Call
+     - Counter
+   * - A descriptor of a map or a program of shirudo's, by id or by pin
+     - ``MapFdWrite`` or ``ObjGet``
+   * - ``BPF_LINK_GET_FD_BY_ID`` of any link, since no hook sees a link
+       descriptor handed out
+     - ``ObjGet``
+   * - ``BPF_OBJ_GET`` or an open of a pin in shirudo's private bpffs
+     - ``ObjGet``
+   * - ``BPF_OBJ_PIN`` into shirudo's private bpffs
+     - ``PinEntry``
+   * - ``BPF_PROG_LOAD`` of a ``BPF_PROG_TYPE_LSM`` program, which would
+       decide at the hooks the guards decide at and could rewrite the
+       seal's labels with the xattr kfuncs
+     - ``LoadNotLoader``
+   * - ``BPF_PROG_LOAD`` of a ``BPF_PROG_TYPE_SYSCALL`` loader: without a
+       signature, against another keyring, or by a task without runtime
+       authority, since what a loader loads runs in kernel context and
+       unmeasured
+     - ``LoadUnsigned``, ``LoadUnverified``, ``LoadKeyringKind``,
+       ``LoadKeyring`` or ``ProgRun``
+   * - A ``bpf()`` command shirudo has not classified
+     - ``BpfCommand``
+
+What common software sees with ``bpf.enforcement = own``. shirudo's
+tests cover the calls in the table above, not the software below; this
+is a reading of what each one asks of ``bpf()``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Software
+     - Effect
+   * - Cilium
+     - The agent loads its datapath, creates and pins its maps under
+       ``/sys/fs/bpf`` and attaches with tcx, cgroup and netkit links.
+       None of that touches an object of shirudo's, and
+       ``cilium-dbg bpf`` reaches only Cilium's own maps.
+   * - Tetragon
+     - Process, file and network observability work: kprobes, fentry,
+       tracepoints and uprobes on binaries other than shirudo's. Its
+       ``lsm`` sensor and enforcement through ``Override`` on ``lsm``
+       hooks are refused. ``Sigkill``, and ``Override`` through
+       ``bpf_override_return`` on the kernel's error-injection list,
+       work. A ``Sigkill`` can end a shirudo command, as root's ``kill``
+       can; a load it stops between its pins and its extend shows in
+       ``status`` (``UpatchesMeasured``) and the next load or unload
+       undoes it.
+   * - Container runtimes, systemd
+     - runc and crun load their ``BPF_PROG_TYPE_CGROUP_DEVICE`` programs
+       and pods start. systemd's ``IPAddressAllow=``, ``DeviceAllow=``,
+       ``SocketBindAllow=`` and the other cgroup-based settings apply;
+       ``RestrictFileSystems=``, an LSM program, stays unapplied.
+   * - ``bpftool``, bcc, bpftrace, ``perf``
+     - Work on everything but shirudo's objects. ``bpftool prog show``
+       and ``map show`` print an error for each id of shirudo's, and
+       ``link show`` for every link.
+
+Two patterns put the other software and shirudo to work together:
+
+- **Observe with Tetragon, mitigate with upatches.** Tetragon's events
+  and shirudo's ``kernel-obs`` and upatch maps go to the same
+  OpenTelemetry collector (:doc:`/operate/run/telemetry`). A Tetragon
+  ``TracingPolicy`` that spots exploitation of a vulnerable path tells
+  the operator which signed upatch to publish; the upatch blocks the
+  path in an ``lsm`` program, which only shirudo loads, and its load is
+  measured in the TPM.
+- **Cilium's datapath next to upatch policy.** Cilium owns the
+  datapath and its network policy, and upatches of the ``cgroup_skb``
+  or ``lsm`` kinds add host policy that a compromised Cilium agent
+  cannot detach or rewrite, since root reaches none of shirudo's
+  objects in either mode.
+
 
 systemd's BPF-based settings
 ----------------------------
@@ -382,7 +501,9 @@ Containers and Kubernetes
    loads are refused (``LoadNotLoader``). How a runtime reacts is up to
    the runtime: test yours on an enforcing target.
 :Networking: A network plugin built on BPF cannot run. Use one that does
-   not need BPF.
+   not need BPF, or boot the node with ``bpf.enforcement = own``
+   (`Sharing BPF with other software`_), where device programs load as
+   well.
 :Mounts: The ``/run/shirudo`` tmpfs, the private bpffs and the runtime
    and config image mounts, and their copies in every other mount
    namespace, cannot be unmounted or remounted one by one, and no task

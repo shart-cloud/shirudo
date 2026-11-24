@@ -86,6 +86,10 @@ determined, as noted.
      - boolean or ``null``
      - ``keyring_serial`` equals ``keyring_serial_pinned``. ``null``
        unless both are known.
+   * - ``bpf_enforcement``
+     - string or ``null``
+     - ``all`` or ``own``, the ``bpf.enforcement`` ``init`` froze in the
+       identity map. ``null`` before ``init``.
    * - ``cert_present``
      - boolean
      - The primary certificate exists: on an image target
@@ -856,6 +860,7 @@ indented here:
      "keyring_serial": 272801410,
      "keyring_serial_pinned": 272801410,
      "keyring_serial_matches": true,
+     "bpf_enforcement": "all",
      "cert_present": true,
      "certs": [
        {

@@ -13,6 +13,7 @@
 cd "$(dirname "$0")/../.."
 . ./integration-lib.sh
 target_guard
+strict_guard
 command -v python3 >/dev/null 2>&1 || test_skip_all "no python3"
 
 H=helper/test-bpf-load

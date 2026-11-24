@@ -8,6 +8,13 @@
 #define PR_ENFORCING_ERR 1002
 
 /*
+ * The bpf.enforcement setting of the initrd bootstrap, as init freezes it
+ * in the identity map: all of BPF is shirudo's, or only its own objects.
+ */
+#define BPF_ENFORCE_ALL 0
+#define BPF_ENFORCE_OWN 1
+
+/*
  * vmlinux.h carries no UAPI macros, so BPF code takes the ioctl number
  * from here: _IOW('$', 8, __u32) on every supported architecture.
  * Userspace includes the UAPI header first, which defines it as is.

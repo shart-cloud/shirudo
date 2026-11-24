@@ -119,6 +119,34 @@ test_expect_success 'the config NvPCR replaces the config PCR, as the runtime im
 	done
 '
 
+test_expect_success 'the initrd bootstrap chooses the BPF enforcement' '
+	"$H" bootstrap "$WORK/initrd.conf" "$WORK/runtime.conf" >"$WORK/result" &&
+	grep -qx "bpf_enforcement=0" "$WORK/result" &&
+	for value in all own; do
+		cp "$WORK/initrd.conf" "$WORK/mode.conf" &&
+		printf "bpf.enforcement = %s\n" "$value" >>"$WORK/mode.conf" &&
+		"$H" bootstrap "$WORK/mode.conf" "$WORK/runtime.conf" \
+			>"$WORK/result" || exit 1
+	done &&
+	grep -qx "bpf_enforcement=1" "$WORK/result"
+'
+
+test_expect_success 'the runtime bootstrap cannot choose the BPF enforcement' '
+	cp "$WORK/runtime.conf" "$WORK/bad.conf" &&
+	printf "bpf.enforcement = own\n" >>"$WORK/bad.conf" &&
+	! "$H" bootstrap "$WORK/initrd.conf" "$WORK/bad.conf"
+'
+
+test_expect_success 'a repeated, unknown or misspelt BPF enforcement is rejected' '
+	for setting in "bpf.enforcement = own\nbpf.enforcement = all" \
+		"bpf.enforcement = none" "bpf.enforcement = OWN" \
+		"bpf.enforcement =" "bpf.unknown = own"; do
+		cp "$WORK/initrd.conf" "$WORK/bad.conf" &&
+		printf "$setting\n" >>"$WORK/bad.conf" &&
+		! "$H" bootstrap "$WORK/bad.conf" || exit 1
+	done
+'
+
 test_expect_success 'unknown image settings and malformed lines are rejected' '
 	for setting in "runtime.unknown = value" "config.unknown = value" "missing equals"; do
 		printf "%s\n" "$setting" >"$WORK/bad.conf" &&

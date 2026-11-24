@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /* Copyright (c) 2026 Authors of shirudo */
 
+#include <shirudo/enforcement.h>
 #include <shirudo/misc.h>
 #include <shirudo/string.h>
 #include <shirudo/tpm.h>
@@ -57,6 +58,22 @@ static int bootstrap_add_certificate(struct image_bootstrap *boot,
 		    sizeof(boot->certificates[i])) < 0)
 		return -ENAMETOOLONG;
 	boot->n_certificates++;
+	return 0;
+}
+
+/* Only the initrd bootstrap, which the UKI carries, chooses the mode. */
+static int bootstrap_set_bpf_enforcement(struct image_bootstrap *boot,
+					 const char *value, bool initial)
+{
+	if (!initial || boot->have_bpf_enforcement)
+		return -EINVAL;
+	if (!strcmp(value, "all"))
+		boot->bpf_enforcement = BPF_ENFORCE_ALL;
+	else if (!strcmp(value, "own"))
+		boot->bpf_enforcement = BPF_ENFORCE_OWN;
+	else
+		return -EINVAL;
+	boot->have_bpf_enforcement = true;
 	return 0;
 }
 
@@ -126,8 +143,12 @@ static int bootstrap_parse(FILE *file, struct image_bootstrap *boot,
 				boot->pcr = TPM_CONFIG_NVPCR_INDEX;
 				boot->have_pcr = true;
 			}
+		} else if (!strcmp(key, "bpf.enforcement")) {
+			ret = bootstrap_set_bpf_enforcement(boot, value,
+							    initial);
 		} else if (str_has_prefix(key, "config.") ||
-			   str_has_prefix(key, "runtime.")) {
+			   str_has_prefix(key, "runtime.") ||
+			   str_has_prefix(key, "bpf.")) {
 			ret = -EINVAL;
 		}
 		if (ret)

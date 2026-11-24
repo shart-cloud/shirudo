@@ -27,6 +27,7 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
+#include <shirudo/enforcement.h>
 #include <shirudo/misc.h>
 #include <shirudo/overflow.h>
 #include <shirudo/string.h>
@@ -694,6 +695,7 @@ static int identity_build(struct identity *id)
 	memcpy(id->runtime_root, image_runtime_root(), 32);
 	id->nv_index = NV_INDEX;
 	id->config_pcr = shirudo_image_config_pcr();
+	id->bpf_enforcement = image_bpf_enforcement();
 
 	err = bpf_anchor(id);
 	if (err)
@@ -754,6 +756,76 @@ static int identity_publish(struct bpf_object *obj, const struct identity *id)
 	return 0;
 }
 
+static bool enforces_own(void)
+{
+	return image_bpf_enforcement() == BPF_ENFORCE_OWN;
+}
+
+/*
+ * lsm/bpf_map and lsm/bpf_prog record what the bootstrap task opens as
+ * shirudo's. Open each map and program of an object once by id, so that
+ * the objects init made before the tracking hooks count as shirudo's.
+ */
+static int claim_map(const struct bpf_map *map)
+{
+	struct bpf_map_info info = {};
+	__u32 length = sizeof(info);
+	int fd;
+
+	if (bpf_map_get_info_by_fd(bpf_map__fd(map), &info, &length))
+		return -errno;
+	fd = bpf_map_get_fd_by_id(info.id);
+	if (fd < 0)
+		return -errno;
+	close(fd);
+	return 0;
+}
+
+static int claim_program(const struct bpf_program *program)
+{
+	struct bpf_prog_info info = {};
+	__u32 length = sizeof(info);
+	int fd;
+
+	if (bpf_prog_get_info_by_fd(bpf_program__fd(program), &info,
+				    &length))
+		return -errno;
+	fd = bpf_prog_get_fd_by_id(info.id);
+	if (fd < 0)
+		return -errno;
+	close(fd);
+	return 0;
+}
+
+static int claim_object(struct bpf_object *obj)
+{
+	struct bpf_program *program;
+	struct bpf_map *map;
+	int err;
+
+	bpf_object__for_each_map(map, obj) {
+		if (bpf_map__fd(map) < 0)
+			continue;
+		err = claim_map(map);
+		if (err) {
+			pr_err("claim map %s: %s", bpf_map__name(map),
+			       strerror(-err));
+			return err;
+		}
+	}
+	bpf_object__for_each_program(program, obj) {
+		if (bpf_program__fd(program) < 0)
+			continue;
+		err = claim_program(program);
+		if (err) {
+			pr_err("claim program %s: %s",
+			       bpf_program__name(program), strerror(-err));
+			return err;
+		}
+	}
+	return 0;
+}
+
 struct lsm_links {
 	struct bpf_link *observers[OBSERVER_HOOK_COUNT];
 	struct bpf_link *image_observers[IMAGE_OBSERVER_HOOK_COUNT];
@@ -761,6 +833,7 @@ struct lsm_links {
 	struct bpf_link *mounts[MOUNT_HOOK_COUNT];
 	struct bpf_link *seal[SEAL_HOOK_COUNT];
 	struct bpf_link *image_seal[IMAGE_SEAL_HOOK_COUNT];
+	struct bpf_link *own[OWN_HOOK_COUNT];
 	struct bpf_object *seal_obj;
 };
 
@@ -824,8 +897,40 @@ static int attach_guards(struct bpf_object *obj, struct lsm_links *links)
 	if (err)
 		return err;
 
-	return attach_gates(gates, bpf_gates, ARRAY_SIZE(bpf_gates),
-			    links->gates);
+	if (!enforces_own())
+		return attach_gates(gates, bpf_gates, ARRAY_SIZE(bpf_gates),
+				    links->gates);
+	/*
+	 * The tracking hooks go before the gates, so that every object
+	 * made once the gates admit other callers is tracked from its
+	 * creation; the claim comes after them, as the gates claim.
+	 */
+	err = attach_guard_group(obj, shirudo_own_guards,
+				 ARRAY_SIZE(shirudo_own_guards), links->own);
+	if (!err)
+		err = attach_gates(gates, bpf_gates, ARRAY_SIZE(bpf_gates),
+				   links->gates);
+	if (!err)
+		err = claim_object(obj);
+	if (!err)
+		err = claim_object(links->seal_obj);
+	return err;
+}
+
+/*
+ * The tracking table holds only what bpf.enforcement = own tracks; the
+ * strict mode attaches none of its hooks and keeps one slot.
+ */
+static int size_owned_table(struct bpf_object *obj)
+{
+	struct bpf_map *owned;
+
+	if (enforces_own())
+		return 0;
+	owned = bpf_object__find_map_by_name(obj, "shirudo_owned");
+	if (!owned)
+		return -ENOENT;
+	return bpf_map__set_max_entries(owned, 1);
 }
 
 static int lsm_attach(struct bpf_object *obj, struct lsm_links *links)
@@ -833,6 +938,11 @@ static int lsm_attach(struct bpf_object *obj, struct lsm_links *links)
 	struct identity id = {};
 	int err;
 
+	err = size_owned_table(obj);
+	if (err) {
+		pr_err("size the owned-object table: %s", strerror(-err));
+		return err;
+	}
 	err = bpf_object__load(obj);
 	if (err) {
 		pr_err("bpf_object__load: %d", err);
@@ -895,6 +1005,7 @@ static void lsm_links_release(struct lsm_links *links, bool failed)
 	release_link_group(links->observers, ARRAY_SIZE(links->observers),
 			   failed);
 	release_link_group(links->seal, ARRAY_SIZE(links->seal), failed);
+	release_link_group(links->own, ARRAY_SIZE(links->own), failed);
 	release_link_group(links->mounts, ARRAY_SIZE(links->mounts), failed);
 	if (failed) {
 		for (i = 0; i < ARRAY_SIZE(gate_release_order); i++) {

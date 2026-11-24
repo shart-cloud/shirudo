@@ -17,6 +17,7 @@
 cd "$(dirname "$0")/../.."
 . ./integration-lib.sh
 target_guard
+strict_guard
 
 H=helper/test-bpf-cmd
 [ -x "$H" ] || test_skip_all "test-bpf-cmd helper not built"

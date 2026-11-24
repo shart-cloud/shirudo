@@ -138,6 +138,7 @@ int image_bootstrap_load(void)
 	if (!ret) {
 		memcpy(image.bootstrap.runtime_root, identity.runtime_root, 32);
 		image.bootstrap.have_root = true;
+		image.bootstrap.bpf_enforcement = identity.bpf_enforcement;
 		ret = load_runtime_config(false);
 	} else {
 		ret = image_bootstrap_read(CONF_PATH,
@@ -163,6 +164,12 @@ int image_bootstrap_load(void)
 const __u8 *image_runtime_root(void)
 {
 	return image.loaded ? image.bootstrap.runtime_root : NULL;
+}
+
+__u32 image_bpf_enforcement(void)
+{
+	return image.loaded ? image.bootstrap.bpf_enforcement :
+			      BPF_ENFORCE_ALL;
 }
 
 static int mkdir_owned(const char *path)

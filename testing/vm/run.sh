@@ -24,6 +24,8 @@
 # mode: no TPM, no initrd and no shirudo kernel arguments, the operator
 # package built in the guest, and alone the signing key in
 # TEST_VM_OPERATOR_KEYS.
+# TEST_VM_BPF_ENFORCEMENT=own boots the target with bpf.enforcement = own
+# in its initrd bootstrap, where shirudo guards only its own BPF objects.
 # TEST_VM_PRIVATE_DIR names a new directory outside the checkout for the
 # key the host logs in with and the VM's disk, which holds the guest's own
 # key, for a VM no other may log in to: by default both lie in the VM's
@@ -1393,6 +1395,10 @@ build_initrd()
 		"$seed/shirudo-test-images/"
 	cp "$TEST_VM_HOST_BUNDLE/verity/bootstrap.conf" \
 		"$seed/shirudo-test-images/bootstrap.conf"
+	if [[ -n "${TEST_VM_BPF_ENFORCEMENT:-}" ]]; then
+		printf 'bpf.enforcement = %s\n' "$TEST_VM_BPF_ENFORCEMENT" \
+			>>"$seed/shirudo-test-images/bootstrap.conf"
+	fi
 	cp "$REPO_ROOT/testing/vm/files/seed-images.sh" \
 		"$seed/shirudo-test-seed-images.sh"
 	cat "$REPO_ROOT/testing/vm/files/shirudo-test-seed-images.conf" \
@@ -1428,7 +1434,8 @@ initrd_cache_key()
 	kver="$(kernel_release_of "$KERNEL")" ||
 		die "cannot read the kernel release from $KERNEL"
 	{
-		printf '%s\n' "$kver" "$(dracut --version)"
+		printf '%s\n' "$kver" "$(dracut --version)" \
+			"${TEST_VM_BPF_ENFORCEMENT:-}"
 		sha256sum "$KERNEL"
 		if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
 			sha256sum "$KERNEL_ARTIFACT_DIR/${TEST_VM_ARCH_KIMAGE}.sha256sum"

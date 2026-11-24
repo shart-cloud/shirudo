@@ -37,7 +37,7 @@ except OSError as e:
 '
 
 test_expect_success 'baseline: unsigned userspace load is denied' '
-	[ "$(./$H)" = "errno=13" ]
+	bpf_gate_live
 '
 
 test_expect_success 'renaming a pin to another name is refused' '
@@ -48,13 +48,13 @@ test_expect_success 'renaming a pin to another name is refused' '
 test_expect_success 'renaming a pin over the lsm/bpf link pin is refused' '
 	[ "$(python3 -c "$RENAME" "$B/identity" "$B/lsm_link")" = 1 ] &&
 	[ -e "$B/identity" ] && [ -e "$B/lsm_link" ] &&
-	[ "$(./$H)" = "errno=13" ]
+	bpf_gate_live
 '
 
 test_expect_success 'renaming the lsm/bpf link pin itself is refused' '
 	[ "$(python3 -c "$RENAME" "$B/lsm_link" "$B/t6106-link")" = 1 ] &&
 	[ -e "$B/lsm_link" ] && [ ! -e "$B/t6106-link" ] &&
-	[ "$(./$H)" = "errno=13" ]
+	bpf_gate_live
 '
 
 test_done

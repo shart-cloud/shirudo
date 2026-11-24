@@ -230,7 +230,17 @@ one usually still compiles and passes tests.
   signed upatches and binds the register. Mounts and pins live under `/run`
   across switch-root. The root service uses the verified runtime and adopts
   the pending initrd event. Missing images or settings are errors. No mode
-  selector, executable inode identity or unsealed fallback may be added.
+  selector beyond the initrd bootstrap's `bpf.enforcement`, executable
+  inode identity or unsealed fallback may be added.
+- **`bpf.enforcement = own` guards shirudo's objects by descriptor.**
+  In that mode `lsm/bpf` admits every command that names its object by
+  descriptor, and `lsm/bpf_map` and `lsm/bpf_prog` refuse a descriptor of
+  an object recorded in `shirudo_owned`. Every map or program shirudo
+  makes must land in that record: through a signed loader, a map its
+  runtime creates, or `init`'s claim of its bootstrap objects. A new
+  path that creates one any other way leaves it open to root. A link
+  has no descriptor hook, so `BPF_LINK_GET_FD_BY_ID` stays reserved, and
+  LSM programs and loaders stay shirudo's in both modes.
 - **Seal labels mark targets, not caller authority.** Only successful exec
   from the authenticated runtime grants the committed task mark. Fork inherits
   it, successful exec re-evaluates it and failed exec preserves it. Writable
